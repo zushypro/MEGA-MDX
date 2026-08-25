@@ -86,7 +86,6 @@ async function handleMessages(sock: any, messageUpdate: any) {
 
         await storeMessage(sock, message);
 
-        // Store pushName in contacts for name resolution (store under both lid and real JID)
         if (message.pushName && (sock as any).store?.contacts) {
             const pid = message.key.participant || message.key.remoteJid;
             if (pid) {
@@ -96,7 +95,6 @@ async function handleMessages(sock: any, messageUpdate: any) {
                     notify: message.pushName,
                     name: message.pushName
                 };
-                // Also store under decoded JID
                 const decoded = (sock as any).decodeJid?.(pid);
                 if (decoded && decoded !== pid) {
                     (sock as any).store.contacts[decoded] = {
@@ -110,7 +108,6 @@ async function handleMessages(sock: any, messageUpdate: any) {
         }
 
         const rawSenderId = message.key.participant || message.key.remoteJid;
-        // Resolve @lid to real JID if possible
         let senderId = rawSenderId;
         if (rawSenderId?.includes('@lid') && (sock as any).store?.contacts) {
             const contacts = (sock as any).store.contacts;
@@ -231,8 +228,7 @@ async function handleMessages(sock: any, messageUpdate: any) {
                             broadcast: message.broadcast
                         };
 
-
-        const context = {
+                        const context = {
                             chatId,
                             senderId,
                             isGroup,
@@ -334,7 +330,6 @@ async function handleMessages(sock: any, messageUpdate: any) {
         if (!message.key.fromMe) {
             await store.incrementMessageCount(chatId, senderId, message.pushName);
         } else {
-            // Count bot owner's own messages too
             const ownJid = (sock as any).user?.id || senderId;
             const ownName = (sock as any).user?.name || (sock as any).user?.notify || 'Me';
             await store.incrementMessageCount(chatId, ownJid, ownName);
@@ -347,7 +342,6 @@ async function handleMessages(sock: any, messageUpdate: any) {
             await handleLinkDetection(sock, chatId, message, userMessage, senderId);
         }
 
-        // Anti-spam flood detection
         if (isGroup && !message.key.fromMe) {
             const spammed = await handleAntiSpam(sock, chatId, message, senderId, senderIsOwnerOrSudo);
             if (spammed) return;
@@ -559,13 +553,11 @@ async function handleMessages(sock: any, messageUpdate: any) {
             }
         }
     }
- }
-
+}
 
 async function handleGroupParticipantUpdate(sock: any, update: any) {
     try {
         const { id, participants, action, author } = update;
-        // Invalidate antispam cache so admin changes take effect immediately
         invalidateGroupCache(id);
         if (!id.endsWith('@g.us')) return;
 
@@ -687,7 +679,7 @@ async function handleMessageUpdates(sock: any, updates: any[]) {
             const isDeletion = 
                 update.update?.message === null || 
                 update.update?.message?.protocolMessage?.type === 2;
-            
+
             if (isDeletion) {
                 printLog('info', `Message deletion detected via update: ${update.key?.id}`);
                 await handleMessageRevocation(sock, update);

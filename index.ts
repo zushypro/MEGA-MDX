@@ -339,7 +339,7 @@ async function startQasimDev(): Promise<any> {
             } catch (err: any) {
                 printLog('error', `Error in messages.upsert: ${err.message}`);
             }
-               });
+        });
 
         QasimDev.ev.on('messages.update', async (updates: any[]) => {
             try {

@@ -37,7 +37,8 @@ import {
     handleMessages,
     handleGroupParticipantUpdate,
     handleStatus,
-    handleCall
+    handleCall,
+    handleMessageUpdates
 } from './lib/messageHandler.js';
 import commandHandler from './lib/commandHandler.js';
 
@@ -337,6 +338,14 @@ async function startQasimDev(): Promise<any> {
                 }
             } catch (err: any) {
                 printLog('error', `Error in messages.upsert: ${err.message}`);
+            }
+               });
+
+        QasimDev.ev.on('messages.update', async (updates: any[]) => {
+            try {
+                await handleMessageUpdates(QasimDev, updates);
+            } catch (err: any) {
+                printLog('error', `Error in messages.update handler: ${err.message}`);
             }
         });
 

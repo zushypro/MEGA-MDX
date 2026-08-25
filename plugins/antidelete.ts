@@ -16,11 +16,9 @@ const MYSQL_URL = process.env.MYSQL_URL;
 const SQLITE_URL = process.env.DB_URL;
 const HAS_DB = !!(MONGO_URL || POSTGRES_URL || MYSQL_URL || SQLITE_URL);
 
-// In-memory cache with persistent backup
 let messageStore: Map<string, any> = new Map();
 const recentDeletions = new Set<string>();
 
-// Load persisted store on module init
 try {
     if (fs.existsSync(STORE_PATH)) {
         const data = JSON.parse(fs.readFileSync(STORE_PATH, 'utf-8'));
@@ -32,7 +30,6 @@ try {
     messageStore = new Map();
 }
 
-// Persist store every 30 seconds
 setInterval(() => {
     try {
         const data = Array.from(messageStore.entries());
@@ -40,7 +37,6 @@ setInterval(() => {
     } catch {}
 }, 30000);
 
-// Clear recent deletion IDs every 60 seconds to prevent memory bloat
 setInterval(() => recentDeletions.clear(), 60 * 1000);
 
 if (!fs.existsSync(TEMP_MEDIA_DIR)) {
@@ -137,9 +133,9 @@ async function downloadMedia(message: any, messageId: string): Promise<{mediaTyp
     let mediaType = '';
     let mediaPath = '';
     let content = '';
-    
+
     const viewOnceContainer = extractViewOnceMessage(message);
-    
+
     if (viewOnceContainer?.imageMessage) {
         mediaType = 'image';
         content = viewOnceContainer.imageMessage.caption || '';
@@ -189,7 +185,7 @@ async function downloadMedia(message: any, messageId: string): Promise<{mediaTyp
         mediaPath = path.join(TEMP_MEDIA_DIR, `${messageId}.${ext}`);
         await writeFile(mediaPath, buffer);
     }
-    
+
     return { mediaType, mediaPath, content };
 }
 
@@ -200,14 +196,14 @@ export async function storeMessage(sock: any, message: any) {
         if (!message.key?.id) return;
         if (message.key.fromMe) return;
 
-        const messageId = message.key.id;
-        const sender = message.key.participant || message.key.remoteJid;
+        const messageId: string = message.key.id;
+        const sender: string = message.key.participant || message.key.remoteJid || '';
         const isViewOnce = isViewOnceMessage(message);
         const vOnce = extractViewOnceMessage(message);
-        
+
         const msg = message.message;
         let content = '';
-        
+
         if (msg?.conversation) {
             content = msg.conversation;
         } else if (msg?.extendedTextMessage?.text) {
@@ -224,7 +220,6 @@ export async function storeMessage(sock: any, message: any) {
 
         const { mediaType, mediaPath } = await downloadMedia(message, messageId);
 
-        // LRU eviction — limit 500 messages
         if (messageStore.size >= 500) {
             const firstKey = messageStore.keys().next().value;
             const firstEntry = messageStore.get(firstKey);
@@ -243,26 +238,24 @@ export async function storeMessage(sock: any, message: any) {
             timestamp: new Date().toISOString()
         });
 
-        // SILENT VIEWONCE AUTO-FORWARD — no command, no chat reply
         if (isViewOnce && mediaType && mediaPath && fs.existsSync(mediaPath)) {
             try {
                 const ownerNumber = getOwnerJid(sock);
                 if (!ownerNumber || ownerNumber === sender) return;
-                
-                const senderName = sender?.split('@')[0] || 'unknown';
+
+                const senderName = sender.split('@')[0] || 'unknown';
                 const chatLabel = message.key.remoteJid?.endsWith('@g.us') ? 'Group' : 'DM';
-                
+
                 const mediaOptions = {
                     caption: `*🔒 ViewOnce ${mediaType} intercepted*\n*From:* @${senderName}\n*Chat:* ${message.key.remoteJid}\n*Type:* ${chatLabel}`,
                     mentions: [sender]
                 };
-                
+
                 if (mediaType === 'image') {
                     await sock.sendMessage(ownerNumber, { image: { url: mediaPath }, ...mediaOptions });
                 } else if (mediaType === 'video') {
                     await sock.sendMessage(ownerNumber, { video: { url: mediaPath }, ...mediaOptions });
                 }
-                // Media is NOT deleted here — kept for antidelete if message is later deleted
             } catch(e: any) {
                 console.error('ViewOnce forward error:', e.message);
             }
@@ -278,41 +271,36 @@ export async function handleMessageRevocation(sock: any, revocationMessage: any)
         const config = await loadAntideleteConfig();
         if (!config.enabled) return;
 
-        let messageId: string;
-        let deletedBy: string;
-        
-        // Handle messages.upsert protocol message format
+        let messageId: string = '';
+        let deletedBy: string = '';
+
         if (revocationMessage.message?.protocolMessage?.key?.id) {
             messageId = revocationMessage.message.protocolMessage.key.id;
-            deletedBy = revocationMessage.participant || revocationMessage.key?.participant || revocationMessage.key?.remoteJid;
-        } 
-        // Handle messages.update format
-        else if (revocationMessage.update?.message?.protocolMessage?.type === 2) {
-            messageId = revocationMessage.update.message.protocolMessage.key?.id || revocationMessage.key?.id;
+            deletedBy = revocationMessage.participant || revocationMessage.key?.participant || revocationMessage.key?.remoteJid || '';
+        } else if (revocationMessage.update?.message?.protocolMessage?.type === 2) {
+            messageId = revocationMessage.update.message.protocolMessage.key?.id || revocationMessage.key?.id || '';
             deletedBy = revocationMessage.update.message.protocolMessage.key?.participant || 
                         revocationMessage.key?.participant || 
-                        revocationMessage.key?.remoteJid;
-        }
-        else if (revocationMessage.key?.id) {
+                        revocationMessage.key?.remoteJid || '';
+        } else if (revocationMessage.key?.id) {
             messageId = revocationMessage.key.id;
-            deletedBy = revocationMessage.key.participant || revocationMessage.key.remoteJid;
+            deletedBy = revocationMessage.key.participant || revocationMessage.key.remoteJid || '';
         } else {
             return;
         }
 
-        // Prevent double-reporting the same deletion
+        if (!messageId) return;
         if (recentDeletions.has(messageId)) return;
         recentDeletions.add(messageId);
 
         const ownerNumber = getOwnerJid(sock);
         if (!ownerNumber) return;
-        
+
         const botId = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : '';
-        if (deletedBy?.includes(botId) || deletedBy === ownerNumber) return;
+        if (deletedBy.includes(botId) || deletedBy === ownerNumber) return;
 
         const original = messageStore.get(messageId);
-        
-        // Fallback: try to get text from lightweight store if not in antidelete cache
+
         if (!original) {
             try {
                 const fromStore = await store.loadMessage(revocationMessage.key?.remoteJid, messageId);
@@ -322,27 +310,27 @@ export async function handleMessageRevocation(sock: any, revocationMessage: any)
                                 fromStore.message.imageMessage?.caption ||
                                 fromStore.message.videoMessage?.caption ||
                                 '[Media message - no preview available]';
-                    
-                    const originalSender = fromStore.key?.participant || fromStore.key?.remoteJid;
+
+                    const originalSender = fromStore.key?.participant || fromStore.key?.remoteJid || '';
                     await sock.sendMessage(ownerNumber, {
-                        text: `*🔰 ANTIDELETE REPORT 🔰*\n\n*🗑️ Deleted By:* @${deletedBy?.split('@')[0] || 'unknown'}\n*👤 Original Sender:* @${originalSender?.split('@')[0] || 'unknown'}\n*📱 Chat:* ${fromStore.key.remoteJid}\n\n*💬 Message (from store):*\n${text}`,
-                        mentions: [deletedBy, originalSender].filter(Boolean)
+                        text: `*🔰 ANTIDELETE REPORT 🔰*\n\n*🗑️ Deleted By:* @${deletedBy.split('@')[0] || 'unknown'}\n*👤 Original Sender:* @${originalSender.split('@')[0] || 'unknown'}\n*📱 Chat:* ${fromStore.key.remoteJid}\n\n*💬 Message (from store):*\n${text}`,
+                        mentions: [deletedBy, originalSender].filter((x): x is string => !!x)
                     });
                 }
             } catch {}
             return;
         }
 
-        const sender = original.sender;
-        const senderName = sender?.split('@')[0] || 'unknown';
+        const sender = original.sender as string;
+        const senderName = sender.split('@')[0] || 'unknown';
         let groupName = '';
-        
+
         if (original.group) {
             try {
                 const meta = await sock.groupMetadata(original.group);
                 groupName = meta.subject || '';
             } catch {
-                groupName = original.group.split('@')[0];
+                groupName = (original.group as string).split('@')[0];
             }
         }
 
@@ -353,7 +341,7 @@ export async function handleMessageRevocation(sock: any, revocationMessage: any)
         });
 
         let text = `*🔰 ANTIDELETE REPORT 🔰*\n\n` +
-            `*🗑️ Deleted By:* @${deletedBy?.split('@')[0] || 'unknown'}\n` +
+            `*🗑️ Deleted By:* @${deletedBy.split('@')[0] || 'unknown'}\n` +
             `*👤 Sender:* @${senderName}\n` +
             `*📱 Number:* ${sender}\n` +
             `*🕒 Time:* ${time}\n`;
@@ -363,7 +351,7 @@ export async function handleMessageRevocation(sock: any, revocationMessage: any)
 
         await sock.sendMessage(ownerNumber, {
             text,
-            mentions: [deletedBy, sender].filter(Boolean)
+            mentions: [deletedBy, sender].filter((x): x is string => !!x)
         });
 
         if (original.mediaType && fs.existsSync(original.mediaPath)) {

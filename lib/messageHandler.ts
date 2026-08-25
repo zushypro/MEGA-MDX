@@ -78,8 +78,8 @@ async function handleMessages(sock: any, messageUpdate: any) {
         const chatId = message.key.remoteJid;
         const isGroup = chatId.endsWith('@g.us');
 
-        if (message.message?.protocolMessage?.type === 0) {
-            printLog('info', 'Message deletion detected');
+                if (message.message?.protocolMessage?.type === 2) {
+            printLog('info', 'Message deletion detected via protocol');
             await handleMessageRevocation(sock, message);
             return;
         }
@@ -671,13 +671,26 @@ async function handleCall(sock: any, calls: any) {
                     }
                 }, 800);
 
-            } catch(error: any) {
-                printLog('error', `Error handling call from ${callerJid.split('@')[0]}: ${error.message}`);
-            }
-        }
-    } catch(error: any) {
+                } catch(error: any) {
         printLog('error', `Call handler error: ${error.message}`);
         console.error(error.stack);
+    }
+}
+
+async function handleMessageUpdates(sock: any, updates: any[]) {
+    try {
+        for (const update of updates) {
+            const isDeletion = 
+                update.update?.message === null || 
+                update.update?.message?.protocolMessage?.type === 2;
+            
+            if (isDeletion) {
+                printLog('info', `Message deletion detected via update: ${update.key?.id}`);
+                await handleMessageRevocation(sock, update);
+            }
+        }
+    } catch (err: any) {
+        printLog('error', `Message update handler error: ${err.message}`);
     }
 }
 
@@ -685,6 +698,6 @@ export {
     handleMessages,
     handleGroupParticipantUpdate,
     handleStatus,
-    handleCall
+    handleCall,
+    handleMessageUpdates
 };
-
